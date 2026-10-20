@@ -739,10 +739,10 @@ void SideBar::layout()
     const double width = geometry().width;
 
     m_title->setColor(!window || window->isActive() ? theme.text : theme.disabledText);
-    const double left = inset + kSmallSpacing;
+    const double left = std::max(inset + kSmallSpacing, 76.0);
     const double right = theme.largeSpacing + kSmallSpacing;
     m_title->setVerticallyCentered(true);
-    m_title->setGeometry({left, kSmallSpacing, std::max(0.0, width - left - right), m_headerHeight - kSmallSpacing});
+    m_title->setGeometry({left, 0.0, std::max(0.0, width - left - right), m_headerHeight});
 
     const double top = m_headerHeight + kSmallSpacing;
     m_scroll->setGeometry({0, top, width, std::max(0.0, geometry().height - top)});
