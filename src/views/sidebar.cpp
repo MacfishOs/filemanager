@@ -534,9 +534,6 @@ SideBar::SideBar(double headerHeight)
     , m_headerHeight(headerHeight)
 {
     setName("sideBar");
-    m_title = addChild<ui::Label>();
-    m_title->setFontSize(12 * 4.0 / 3);
-    m_title->setElide(ui::Label::Elide::Right);
     m_scroll = addChild<ui::ScrollView>();
     m_list = m_scroll->setContent<SidebarList>(this);
     m_scroll->setVerticalBarPadding(1, kSmallSpacing);
@@ -702,11 +699,6 @@ void SideBar::retranslate()
         texts();
 }
 
-void SideBar::setTitle(std::string title)
-{
-    m_title->setText(std::move(title));
-}
-
 void SideBar::updateSelection(const std::string& path)
 {
     m_selectedPath = path;
@@ -735,23 +727,16 @@ void SideBar::layout()
     const ui::Theme& theme = ui::Theme::current();
     const ui::Window* window = this->window();
     const double scale = window ? window->scale() : 1;
-    const double inset = std::round(kSmallSpacing * 1.5 * scale) / scale;
     const double width = geometry().width;
 
-    m_title->setColor(!window || window->isActive() ? theme.text : theme.disabledText);
-    const double left = std::max(inset + kSmallSpacing, 76.0);
-    const double right = theme.largeSpacing + kSmallSpacing;
-    m_title->setVerticallyCentered(true);
-    m_title->setGeometry({left, 0.0, std::max(0.0, width - left - right), m_headerHeight});
-
-    const double top = m_headerHeight + kSmallSpacing;
+    const double top = 46.0;
     m_scroll->setGeometry({0, top, width, std::max(0.0, geometry().height - top)});
 }
 
 void SideBar::paint(ui::Painter& painter)
 {
-    // A step below the folder view's colour in both modes.
-    painter.fillRect(localRect(), style::withAlpha(ui::Theme::current().background, 0.7));
+    const ui::Theme& theme = ui::Theme::current();
+    painter.fillRect(localRect(), style::withAlpha(theme.background, 0.2));
 }
 
 } // namespace fm

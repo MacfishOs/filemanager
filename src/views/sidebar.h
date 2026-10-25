@@ -44,7 +44,6 @@ public:
     ~SideBar() override;
 
     PlacesModel& places() const { return *m_places; }
-    void setTitle(std::string title);
     // The places and the open dialogs in the language of now; what the
     // dialogs were given stays.
     void retranslate();
@@ -81,7 +80,6 @@ private:
     // Each open question's title, text and button, set again as the language changes.
     std::map<ui::ConfirmDialog*, std::function<void()>> m_confirmTexts;
     double m_headerHeight;
-    ui::Label* m_title;
     ui::ScrollView* m_scroll;
     SidebarList* m_list;
     std::string m_selectedPath;

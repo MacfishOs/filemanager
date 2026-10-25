@@ -533,7 +533,6 @@ FolderWindow::FolderWindow(FileManagerHost* host, const FolderPage::Start& start
     m_root = root.get();
     m_window->setContentView(std::move(root));
     m_sidebar = m_root->sidebar;
-    m_sidebar->setTitle(tr("Files"));
     m_pathBar = m_root->row->pathBar;
     m_tabBar = m_root->tabBar;
     m_back = m_root->row->back;
@@ -629,7 +628,6 @@ FolderPage* FolderWindow::currentPage() const
 void FolderWindow::retranslate()
 {
     m_window->setTitle(tr("Files"));
-    m_sidebar->setTitle(tr("Files"));
     m_sidebar->retranslate();
     m_pathBar->retranslate();
     m_root->scopeBar->retranslate();
