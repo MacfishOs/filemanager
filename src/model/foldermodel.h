@@ -200,12 +200,9 @@ public:
     bool openWithApplication(const std::string& desktopFile) const;
     static bool supportSetAsWallpaper(const std::string& mimeType);
 
-    // Archive progress for the archive dialog.
+    // The running archive job, for its password prompt.
     bool archiveBusy() const { return m_archive != nullptr; }
     bool archiveCancelling() const { return m_archiveCancelling; }
-    int archiveProgress() const { return m_archiveProgress; }
-    const std::string& archiveOperation() const { return m_archiveOperation; }
-    const std::string& archiveCurrentFile() const { return m_archiveCurrentFile; }
     std::string archiveSourceName() const { return m_archive ? m_archive->sourceName() : std::string(); }
     // The password request waiting for an answer; 0 when none is.
     uint32_t archivePasswordId() const { return m_archivePasswordId; }
@@ -270,6 +267,9 @@ private:
     void rememberNewDocumentPosition(const std::string& name);
     void startArchive(OperationTaskPtr task, const std::string& operation, const std::string& outputPath);
     void archiveFinished(bool success, bool canceled, const std::string& outputPath);
+    // Mounts the image through cutefish-mountd; its volume shows in the sidebar.
+    void openBundle(const FileItem& file);
+    void mountDiskImage(const std::string& path);
     void pasteTo(const std::string& destination, const std::string& selectIn);
     void createActions();
     void updateActions();
@@ -303,6 +303,8 @@ private:
     std::vector<std::string> m_needSelectUrls;
     base::Timer m_needSelectTimer;
     std::string m_newDocumentUrl;
+    // Names asked for by renames still under way, by the file's old URL.
+    std::map<std::string, std::string> m_renamingNames;
 
     // The desktop.
     int m_newDocumentX = -1;
@@ -319,9 +321,7 @@ private:
 
     OperationTaskPtr m_archive;
     bool m_archiveCancelling = false;
-    int m_archiveProgress = -1;
     std::string m_archiveOperation;
-    std::string m_archiveCurrentFile;
     std::string m_archiveOutputPath;
     uint32_t m_archivePasswordId = 0;
     bool m_archivePasswordRetry = false;

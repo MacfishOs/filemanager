@@ -5,6 +5,7 @@
 #include "core/common.h"
 #include "core/standardfolders.h"
 
+#include "base/application_bundle.h"
 #include "base/application_registry.h"
 #include "base/dbus.h"
 #include "base/file.h"
@@ -77,7 +78,7 @@ bool setDefaultApplication(const std::string& mimeType, const std::string& deskt
     const auto entry = base::ApplicationRegistry::instance().byPath(desktopFile);
     if (!entry)
         return false;
-    return base::mimeapps::setDefault(base::mimeapps::userListPath(), mimeType, entry->id + ".desktop");
+    return base::mimeapps::setDefault(base::mimeapps::userListPath(), mimeType, base::mimeapps::listedId(*entry));
 }
 
 static std::function<void(std::function<void(const std::string&)>)> s_tokenSource;
@@ -162,15 +163,28 @@ static bool isDesktopFile(const std::string& path)
     return base::mime::inherits(base::mime::typeForFile(path), "application/x-desktop");
 }
 
+static bool isBundle(const std::string& path)
+{
+    return !base::bundle::bundlePath(path).empty() && base::mime::typeForFile(path) == "inode/directory";
+}
+
 bool launchFile(const std::string& path)
 {
-    if (isDesktopFile(path))
+    if (isDesktopFile(path) || isBundle(path))
         return launchApplication(path);
     return startCommand({path});
 }
 
 bool isTrusted(const std::string& path)
 {
+    // Installing is moving it into ~/Applications.
+    if (isBundle(path)) {
+        char resolved[PATH_MAX];
+        char applications[PATH_MAX];
+        return ::realpath(parentPath(path).c_str(), resolved)
+                && ::realpath(base::bundle::applicationsDirectory().c_str(), applications)
+                && std::string(resolved) == applications;
+    }
     if (!isDesktopFile(path))
         return false;
 

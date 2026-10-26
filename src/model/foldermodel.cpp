@@ -5,10 +5,12 @@
 #include "core/config.h"
 #include "core/dates.h"
 #include "core/launcher.h"
+#include "core/mounts.h"
 #include "core/preferences.h"
 #include "core/standardfolders.h"
 #include "core/thumbnails.h"
 
+#include "base/application_registry.h"
 #include "base/dbus.h"
 #include "base/event_loop.h"
 #include "base/i18n.h"
@@ -33,7 +35,6 @@ using cutefish::i18n::format;
 using cutefish::i18n::tr;
 using cutefish::i18n::trc;
 using cutefish::i18n::trn;
-using cutefish::i18n::trNoop;
 
 namespace fm {
 
@@ -228,6 +229,10 @@ FolderModel::FolderModel(FolderModelHost* host, bool desktop)
         setStatus(Status::Listing);
     }));
     m_subscriptions.push_back(m_contents.rowsChanged.connect([this](const ContentsChange& change) {
+        for (const auto& [from, to] : change.renamed)
+            m_renamingNames.erase(from);
+        for (const std::string& url : change.removed)
+            m_renamingNames.erase(url);
         contentsChanged(change);
     }));
     m_subscriptions.push_back(m_contents.preparationFinished.connect([this] {
@@ -237,6 +242,7 @@ FolderModel::FolderModel(FolderModelHost* host, bool desktop)
         updateActions();
     }));
     m_subscriptions.push_back(m_contents.reset.connect([this] {
+        m_renamingNames.clear();
         m_currentIndex = -1;
         syncSelectionRows();
         countChanged.emit();
@@ -336,6 +342,10 @@ std::string FolderModel::displayName(int row) const
     const FileItemPtr file = item(row);
     if (!file)
         return {};
+    // The typed name shows at once, not the old one until the folder is listed again.
+    if (const auto renaming = m_renamingNames.find(file->url);
+        renaming != m_renamingNames.end() && file->displayName.empty())
+        return renaming->second;
     if (file->isDir && file->isLocalFile()) {
         const std::string standard = standardFolderName(file->path);
         if (!standard.empty())
@@ -355,6 +365,9 @@ std::string FolderModel::fileSizeText(int row)
             return {};
         return trn("{n} item", "{n} items", uint64_t(count));
     }
+    // The folder's own size says nothing about the application's.
+    if (file->isBundle)
+        return {};
     return formatSize(file->size);
 }
 
@@ -377,6 +390,8 @@ std::string FolderModel::fileTypeText(int row) const
         return {};
     if (file->isDir)
         return tr("Folder");
+    if (file->isBundle)
+        return tr("Application");
     return file->typeDescription.empty() ? file->mimeType : file->typeDescription;
 }
 
@@ -1054,11 +1069,16 @@ void FolderModel::rename(int row, const std::string& name)
 
     const std::string destination = base::url::fromLocalFile(parentPath(file->path) + '/' + name);
     m_contents.expectRename(file->url, destination);
+    m_renamingNames[file->url] = name;
     renaming.emit(file->url, destination);
     const OperationTaskPtr task = OperationsClient::instance().rename(file->url, destination);
     whenFinished(task, m_alive, [this, from = file->url, destination](const OperationTask& outcome) {
         if (outcome.error() || outcome.wasCanceled()) {
             m_contents.forgetRename(from, destination);
+            if (m_renamingNames.erase(from) > 0) {
+                if (const int row = rowForUrl(from); row >= 0)
+                    rowsChanged.emit(ContentsChange {{}, {}, {row}, false});
+            }
             renameFailed.emit(from, destination);
         }
     });
@@ -1160,7 +1180,17 @@ void FolderModel::openSelected()
             continue;
         }
 
+        if (file->isBundle && file->isLocalFile()) {
+            openBundle(*file);
+            continue;
+        }
+
         const std::string& mimeType = file->mimeType;
+        if (mimeType == "application/x-apple-diskimage" && file->isLocalFile() && !file->isDir) {
+            mountDiskImage(file->path);
+            continue;
+        }
+
         // Installed launchers run; any other one opens as text like a plain file.
         if (mimeType == "application/x-desktop" && launcher::isTrusted(file->path)) {
             launcher::launchFile(file->path);
@@ -1189,6 +1219,33 @@ void FolderModel::openSelected()
 
         launcher::startCommand({"xdg-open", file->url});
     }
+}
+
+void FolderModel::openBundle(const FileItem& file)
+{
+    // Without a program that runs bundles one is a folder like any other.
+    if (!base::ApplicationRegistry::instance().runsBundles()) {
+        if (m_isDesktop)
+            openInNewWindow(file.url);
+        else
+            setUrl(file.url);
+        return;
+    }
+    if (launcher::isTrusted(file.path))
+        launcher::launchFile(file.path);
+    else if (m_host)
+        m_host->confirmLaunch(file.path);
+}
+
+void FolderModel::mountDiskImage(const std::string& path)
+{
+    MountsClient::instance().requestMount(
+            path, {}, [this, alive = m_alive](const std::string& status, const base::dbus::VariantMap& details) {
+                if (!*alive || status == "mounted")
+                    return;
+                const auto found = details.find("message");
+                notification.emit(found != details.end() ? found->second.value<std::string>() : std::string());
+            });
 }
 
 void FolderModel::showOpenWithDialog()
@@ -1349,10 +1406,8 @@ void FolderModel::startArchive(OperationTaskPtr task, const std::string& operati
 
     m_archive = task;
     m_archiveCancelling = false;
-    m_archiveProgress = -1;
     m_archiveOperation = operation;
     m_archiveOutputPath = outputPath;
-    m_archiveCurrentFile.clear();
     m_archivePasswordId = 0;
     m_archivePasswordRetry = false;
     archiveChanged.emit();
@@ -1360,14 +1415,9 @@ void FolderModel::startArchive(OperationTaskPtr task, const std::string& operati
     m_archiveChanged = task->changed.connect([this] {
         if (!m_archive)
             return;
-        const TaskProgress progress = m_archive->progress();
-        const int value = progress.totalsKnown ? int(progress.processedItems) : -1;
         const uint32_t passwordId = m_archive->waitingForPassword() ? m_archive->passwordId() : 0;
         const bool passwordRetry = m_archive->passwordRetry();
-        if (value != m_archiveProgress || progress.currentPath != m_archiveCurrentFile
-            || passwordId != m_archivePasswordId || passwordRetry != m_archivePasswordRetry) {
-            m_archiveProgress = value;
-            m_archiveCurrentFile = progress.currentPath;
+        if (passwordId != m_archivePasswordId || passwordRetry != m_archivePasswordRetry) {
             m_archivePasswordId = passwordId;
             m_archivePasswordRetry = passwordRetry;
             archiveChanged.emit();
@@ -1403,7 +1453,7 @@ void FolderModel::compressSelected()
     const std::string baseName
             = paths.size() == 1 ? fileName(paths.front()) : std::string(trc("default file name", "Archive"));
     const std::string outputPath = uniquePath(destination, baseName + ".zip", false);
-    startArchive(OperationsClient::instance().archive(0, paths, outputPath), trNoop("Compressing"), outputPath);
+    startArchive(OperationsClient::instance().archive(0, paths, outputPath), "Compressing", outputPath);
 }
 
 void FolderModel::extractSelectedArchive()
@@ -1430,7 +1480,7 @@ void FolderModel::extractSelectedArchive()
         baseName = trc("default file name", "Extracted");
 
     const std::string outputPath = uniquePath(parentPath(file->path), baseName, !singleFile);
-    startArchive(OperationsClient::instance().archive(1, {file->path}, outputPath), trNoop("Extracting"), outputPath);
+    startArchive(OperationsClient::instance().archive(1, {file->path}, outputPath), "Extracting", outputPath);
 }
 
 void FolderModel::cancelArchive()
@@ -1454,8 +1504,6 @@ void FolderModel::archiveFinished(bool success, bool canceled, const std::string
     m_archive.reset();
     m_archiveChanged.reset();
     m_archiveCancelling = false;
-    m_archiveProgress = success ? 100 : -1;
-    m_archiveCurrentFile.clear();
     m_archivePasswordId = 0;
     m_archivePasswordRetry = false;
     archiveChanged.emit();
